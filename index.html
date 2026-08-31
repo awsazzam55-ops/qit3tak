@@ -156,7 +156,7 @@ async function submitAuth(){
       const {error}=await sb.auth.signInWithPassword({email,password});
       if(error) throw error;
       document.getElementById("authMsg").textContent="تم تسجيل الدخول.";
-      await refreshUser();
+      await refreshUser().then(()=>syncGuestOrders()).then(()=>loadOrders());
       show("home");
     }
   }catch(e){ document.getElementById("authMsg").textContent=e.message; }
@@ -215,19 +215,25 @@ async function submitRequest(){
       const {error:upErr}=await sb.storage.from("part-images").upload(
         path,file,{contentType:file.type||"image/jpeg",upsert:false}
       );
-      if(upErr) throw new Error(upErr.message || "فشل رفع الصورة");
-      image_url=path;
+      if(upErr){
+        console.warn("Qit3tak image upload error:",upErr);
+        image_url=null;
+      }else{
+        image_url=path;
+      }
     }
 
-    const result=await sb.from("part_requests").insert({
-      id:requestId,
-      customer_id:currentUser ? currentUser.id : null,
-      make,model,
-      year:yearVal ? Number(yearVal) : null,
-      part_name,
-      part_number:part_number||null,
-      image_url,
-      notes:notes||null
+    // Use a SECURITY DEFINER RPC so guest inserts do not depend on client-side RLS details.
+    const result=await sb.rpc("submit_part_request",{
+      p_id:requestId,
+      p_customer_id:currentUser ? currentUser.id : null,
+      p_make:make,
+      p_model:model,
+      p_year:yearVal ? Number(yearVal) : null,
+      p_part_name:part_name,
+      p_part_number:part_number||null,
+      p_image_url:image_url,
+      p_notes:notes||null
     });
 
     if(result.error) throw new Error(result.error.message || "تعذر حفظ الطلب.");
@@ -261,6 +267,24 @@ async function submitRequest(){
 
   if(btn){btn.disabled=false;btn.textContent="أرسل الطلب";}
 }
+async function syncGuestOrders(){
+  const saved=JSON.parse(localStorage.getItem("qit3tak_guest_orders")||"[]");
+  const pending=saved.filter(x=>x.server_saved===false);
+  if(!pending.length) return;
+  let changed=false;
+  for(const r of pending){
+    try{
+      const result=await sb.rpc("submit_part_request",{
+        p_id:r.id, p_customer_id:null, p_make:r.make, p_model:r.model,
+        p_year:r.year ? Number(r.year) : null, p_part_name:r.part_name,
+        p_part_number:r.part_number||null, p_image_url:null, p_notes:r.notes||null
+      });
+      if(!result.error){ r.server_saved=true; changed=true; }
+    }catch(e){ console.warn("Qit3tak sync error:",e); }
+  }
+  if(changed) localStorage.setItem("qit3tak_guest_orders",JSON.stringify(saved.slice(0,20)));
+}
+
 async function loadOrders(){
   const box=document.getElementById("ordersList");
   if(currentUser){
