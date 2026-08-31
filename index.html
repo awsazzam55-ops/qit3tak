@@ -71,6 +71,7 @@ textarea{min-height:90px;resize:vertical}.small{font-size:11px;color:#8f98a4}.su
     <textarea id="notes" placeholder="مثال: أمامي يمين، أصلي مستعمل، أو أي تفاصيل تساعدنا نلاقيها."></textarea>
     <button class="cta" onclick="submitRequest()">أرسل الطلب</button>
     <div id="requestMsg"></div>
+    <div class="small" style="margin-top:8px">إذا تعذر الاتصال بالخادم، سيُحفظ الطلب مؤقتًا على هذا الجهاز بدل ظهور خطأ.</div>
   </div>
 </section>
 
@@ -198,9 +199,14 @@ async function submitRequest(){
   const btn=document.querySelector('#request button.cta');
   if(btn){btn.disabled=true;btn.textContent="جاري إرسال الطلب…";}
 
-  try{
-    let image_url=null;
+  const requestId=crypto.randomUUID();
+  const createdAt=new Date().toISOString();
+  let image_url=null;
+  let savedToServer=false;
+  let serverError="";
 
+  try{
+    // Try Supabase first.
     if(file){
       if(file.size > 10*1024*1024) throw new Error("حجم الصورة أكبر من 10 MB.");
       const ext=(file.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,"")||"jpg";
@@ -209,15 +215,10 @@ async function submitRequest(){
       const {error:upErr}=await sb.storage.from("part-images").upload(
         path,file,{contentType:file.type||"image/jpeg",upsert:false}
       );
-      if(upErr) throw new Error("فشل رفع الصورة: "+upErr.message);
+      if(upErr) throw new Error(upErr.message || "فشل رفع الصورة");
       image_url=path;
     }
 
-    const requestId=crypto.randomUUID();
-    const createdAt=new Date().toISOString();
-
-    // Keep the request insert simple and do not ask Supabase to return rows.
-    // This is important for anonymous/RLS inserts.
     const result=await sb.from("part_requests").insert({
       id:requestId,
       customer_id:currentUser ? currentUser.id : null,
@@ -230,37 +231,36 @@ async function submitRequest(){
     });
 
     if(result.error) throw new Error(result.error.message || "تعذر حفظ الطلب.");
-
-    const guestOrders=JSON.parse(localStorage.getItem("qit3tak_guest_orders")||"[]");
-    guestOrders.unshift({
-      id:requestId,make,model,year:yearVal,part_name,part_number,
-      status:"open",created_at:createdAt
-    });
-    localStorage.setItem("qit3tak_guest_orders",JSON.stringify(guestOrders.slice(0,20)));
-
-    msg("requestMsg",`تم إرسال طلبك بنجاح ✅<br>رقم الطلب: ${escapeHtml(requestId.slice(0,8))}`);
-
-    ["make","model","year","part_name","part_number","notes"]
-      .forEach(id=>document.getElementById(id).value="");
-    document.getElementById("image").value="";
-    loadOrders();
-
+    savedToServer=true;
   }catch(e){
-    console.error("Qit3tak submit error:",e);
-    let text=e?.message || String(e);
-
-    // Browser-level "Load failed" usually means the device could not reach
-    // the Supabase API at all, so tell the user what to check instead of
-    // blaming Arabic input.
-    if(/load failed|failed to fetch|networkerror|network request failed/i.test(text)){
-      text="تعذر الاتصال بخادم الطلبات. جرّب تحديث الصفحة والتأكد من الإنترنت. إذا استمر الخطأ، شغّل ملف supabase_guest_setup.sql في مشروع Supabase ثم جرّب مرة أخرى.";
-    }
-    msg("requestMsg",escapeHtml(text),"error");
-  }finally{
-    if(btn){btn.disabled=false;btn.textContent="أرسل الطلب";}
+    console.error("Qit3tak server error:",e);
+    serverError=e?.message || String(e);
   }
-}
 
+  // Always keep a local copy so the user is not stuck on "Load failed".
+  const guestOrders=JSON.parse(localStorage.getItem("qit3tak_guest_orders")||"[]");
+  guestOrders.unshift({
+    id:requestId,make,model,year:yearVal,part_name,part_number,
+    notes,status:"open",created_at:createdAt,server_saved:savedToServer
+  });
+  localStorage.setItem("qit3tak_guest_orders",JSON.stringify(guestOrders.slice(0,20)));
+
+  if(savedToServer){
+    msg("requestMsg",`تم إرسال طلبك بنجاح ✅<br>رقم الطلب: ${escapeHtml(requestId.slice(0,8))}`);
+  }else{
+    msg("requestMsg",
+      `تم حفظ الطلب على هذا الجهاز ✅<br>رقم الطلب: ${escapeHtml(requestId.slice(0,8))}<br><span class="small">ملاحظة: تعذر الاتصال بخادم الطلبات حالياً، لذلك لم يتم إرساله للتجار بعد.</span>`,
+      "success"
+    );
+  }
+
+  ["make","model","year","part_name","part_number","notes"]
+    .forEach(id=>document.getElementById(id).value="");
+  document.getElementById("image").value="";
+  loadOrders();
+
+  if(btn){btn.disabled=false;btn.textContent="أرسل الطلب";}
+}
 async function loadOrders(){
   const box=document.getElementById("ordersList");
   if(currentUser){
