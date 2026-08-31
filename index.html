@@ -201,21 +201,28 @@ async function submitRequest(){
       if(upErr) throw upErr;
       image_url=path;
     }
-    const {data,error}=await sb.from("part_requests").insert({
-      customer_id:null,
+    // Generate the request id in the browser so a guest insert does not need
+    // a SELECT permission / RETURNING query. This avoids the generic
+    // "TypeError: Load failed" that can occur when the anon role inserts into
+    // a table with RLS but has no SELECT policy.
+    const requestId=crypto.randomUUID();
+    const createdAt=new Date().toISOString();
+    const {error}=await sb.from("part_requests").insert({
+      id:requestId,
+      customer_id:currentUser ? currentUser.id : null,
       make,model,
       year:yearVal ? Number(yearVal) : null,
       part_name,part_number:part_number||null,
       image_url,notes:notes||null
-    }).select().single();
+    });
     if(error) throw error;
     const guestOrders=JSON.parse(localStorage.getItem("qit3tak_guest_orders")||"[]");
     guestOrders.unshift({
-      id:data.id, make, model, year:yearVal, part_name, part_number,
-      status:data.status || "open", created_at:data.created_at || new Date().toISOString()
+      id:requestId, make, model, year:yearVal, part_name, part_number,
+      status:"open", created_at:createdAt
     });
     localStorage.setItem("qit3tak_guest_orders", JSON.stringify(guestOrders.slice(0,20)));
-    msg("requestMsg",`تم إرسال طلبك بنجاح ✅<br>رقم الطلب: ${escapeHtml(data.id.slice(0,8))}`);
+    msg("requestMsg",`تم إرسال طلبك بنجاح ✅<br>رقم الطلب: ${escapeHtml(requestId.slice(0,8))}`);
     ["make","model","year","part_name","part_number","notes"].forEach(id=>document.getElementById(id).value="");
     document.getElementById("image").value="";
     loadOrders();
