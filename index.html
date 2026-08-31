@@ -315,6 +315,12 @@ function escapeHtml(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;",
 
 sb.auth.onAuthStateChange((_event,_session)=>{ setTimeout(refreshUser,0); });
 refreshUser();
+
+// مزامنة الطلبات المحفوظة محليًا تلقائيًا عند عودة الاتصال بالخادم.
+window.addEventListener("online", ()=>{ setTimeout(syncGuestOrders, 1000); });
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) syncGuestOrders(); });
+setTimeout(syncGuestOrders, 1500);
+setInterval(syncGuestOrders, 30000);
 </script>
 </body>
 </html>
