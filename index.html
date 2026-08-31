@@ -189,44 +189,76 @@ async function submitRequest(){
   const part_number=document.getElementById("part_number").value.trim();
   const notes=document.getElementById("notes").value.trim();
   const file=document.getElementById("image").files[0];
-  if(!make || !model || !part_name){ msg("requestMsg","عبّي ماركة السيارة والموديل واسم القطعة على الأقل.","error"); return; }
-  let image_url=null;
+
+  if(!make || !model || !part_name){
+    msg("requestMsg","عبّي ماركة السيارة والموديل واسم القطعة على الأقل.","error");
+    return;
+  }
+
+  const btn=document.querySelector('#request button.cta');
+  if(btn){btn.disabled=true;btn.textContent="جاري إرسال الطلب…";}
+
   try{
+    let image_url=null;
+
     if(file){
       if(file.size > 10*1024*1024) throw new Error("حجم الصورة أكبر من 10 MB.");
-      const ext=(file.name.split(".").pop()||"jpg").toLowerCase();
+      const ext=(file.name.split(".").pop()||"jpg").toLowerCase().replace(/[^a-z0-9]/g,"")||"jpg";
       const ownerPath=currentUser ? currentUser.id : "guest";
       const path=`${ownerPath}/${crypto.randomUUID()}.${ext}`;
-      const {error:upErr}=await sb.storage.from("part-images").upload(path,file,{contentType:file.type||"image/jpeg",upsert:false});
-      if(upErr) throw upErr;
+      const {error:upErr}=await sb.storage.from("part-images").upload(
+        path,file,{contentType:file.type||"image/jpeg",upsert:false}
+      );
+      if(upErr) throw new Error("فشل رفع الصورة: "+upErr.message);
       image_url=path;
     }
-    // Generate the request id in the browser so a guest insert does not need
-    // a SELECT permission / RETURNING query. This avoids the generic
-    // "TypeError: Load failed" that can occur when the anon role inserts into
-    // a table with RLS but has no SELECT policy.
+
     const requestId=crypto.randomUUID();
     const createdAt=new Date().toISOString();
-    const {error}=await sb.from("part_requests").insert({
+
+    // Keep the request insert simple and do not ask Supabase to return rows.
+    // This is important for anonymous/RLS inserts.
+    const result=await sb.from("part_requests").insert({
       id:requestId,
       customer_id:currentUser ? currentUser.id : null,
       make,model,
       year:yearVal ? Number(yearVal) : null,
-      part_name,part_number:part_number||null,
-      image_url,notes:notes||null
+      part_name,
+      part_number:part_number||null,
+      image_url,
+      notes:notes||null
     });
-    if(error) throw error;
+
+    if(result.error) throw new Error(result.error.message || "تعذر حفظ الطلب.");
+
     const guestOrders=JSON.parse(localStorage.getItem("qit3tak_guest_orders")||"[]");
     guestOrders.unshift({
-      id:requestId, make, model, year:yearVal, part_name, part_number,
-      status:"open", created_at:createdAt
+      id:requestId,make,model,year:yearVal,part_name,part_number,
+      status:"open",created_at:createdAt
     });
-    localStorage.setItem("qit3tak_guest_orders", JSON.stringify(guestOrders.slice(0,20)));
+    localStorage.setItem("qit3tak_guest_orders",JSON.stringify(guestOrders.slice(0,20)));
+
     msg("requestMsg",`تم إرسال طلبك بنجاح ✅<br>رقم الطلب: ${escapeHtml(requestId.slice(0,8))}`);
-    ["make","model","year","part_name","part_number","notes"].forEach(id=>document.getElementById(id).value="");
+
+    ["make","model","year","part_name","part_number","notes"]
+      .forEach(id=>document.getElementById(id).value="");
     document.getElementById("image").value="";
     loadOrders();
-  }catch(e){ msg("requestMsg",e.message,"error"); }
+
+  }catch(e){
+    console.error("Qit3tak submit error:",e);
+    let text=e?.message || String(e);
+
+    // Browser-level "Load failed" usually means the device could not reach
+    // the Supabase API at all, so tell the user what to check instead of
+    // blaming Arabic input.
+    if(/load failed|failed to fetch|networkerror|network request failed/i.test(text)){
+      text="تعذر الاتصال بخادم الطلبات. جرّب تحديث الصفحة والتأكد من الإنترنت. إذا استمر الخطأ، شغّل ملف supabase_guest_setup.sql في مشروع Supabase ثم جرّب مرة أخرى.";
+    }
+    msg("requestMsg",escapeHtml(text),"error");
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent="أرسل الطلب";}
+  }
 }
 
 async function loadOrders(){
