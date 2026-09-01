@@ -223,8 +223,16 @@ async function submitRequest(){
       }
     }
 
-    // Use a SECURITY DEFINER RPC so guest inserts do not depend on client-side RLS details.
-    const result=await sb.rpc("submit_part_request",{
+    // First try the RPC. If the SQL function was not installed yet,
+    // fall back to a normal INSERT so the request can still reach Supabase.
+    const payload={
+      id:requestId,
+      customer_id:currentUser ? currentUser.id : null,
+      make, model, year:yearVal ? Number(yearVal) : null,
+      part_name, part_number:part_number||null, image_url, notes:notes||null,
+      status:"open", created_at:createdAt
+    };
+    const rpcResult=await sb.rpc("submit_part_request",{
       p_id:requestId,
       p_customer_id:currentUser ? currentUser.id : null,
       p_make:make,
@@ -236,7 +244,11 @@ async function submitRequest(){
       p_notes:notes||null
     });
 
-    if(result.error) throw new Error(result.error.message || "تعذر حفظ الطلب.");
+    if(rpcResult.error){
+      console.warn("Qit3tak RPC failed; trying direct INSERT:",rpcResult.error);
+      const {error:insertErr}=await sb.from("part_requests").insert(payload);
+      if(insertErr) throw new Error(insertErr.message || rpcResult.error.message || "تعذر حفظ الطلب.");
+    }
     savedToServer=true;
   }catch(e){
     console.error("Qit3tak server error:",e);
